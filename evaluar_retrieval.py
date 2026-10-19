@@ -41,7 +41,7 @@ def evaluate(retriever, dataset, k):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--k", type=int, nargs="+", default=[TOP_K, 2])
+    parser.add_argument("--k", type=int, nargs="+", default=[TOP_K])
     parser.add_argument("--output", type=Path, help="Guardar informe JSON, por ejemplo results/retrieval.json")
     args = parser.parse_args()
     chunks = load_chunks()
@@ -50,7 +50,7 @@ def main():
     retriever = Retriever(chunks)
     report = {"fecha_utc": datetime.now(timezone.utc).isoformat(), "embedding_model": EMBED_MODEL,
               "corpus_sha256": corpus_digest(chunks), "chunk_ids": [c.id for c in chunks],
-              "top_k_web": TOP_K, "nota": "Conjunto de desarrollo pequeño; no demuestra generalización.",
+              "top_k_web": TOP_K, "nota": "Solo libro: prueba de funcionamiento con dos chunks, no validación de calidad. Con k=2 se recupera todo el corpus.",
               "resultados": [evaluate(retriever, GOLDEN_DATASET, k) for k in args.k]}
     # Recuperar siempre un vecino NO prueba que exista una respuesta. Estos casos
     # requieren revisión de la abstención del generador, no un recall ficticio.
@@ -63,7 +63,9 @@ def main():
         print(f"\nTop {run['k']} · {run['n_preguntas']} preguntas")
         for name, value in run["metricas"].items():
             print(f"  {name}: {value:.3f}")
-    print("\nAdvertencia: benchmark de desarrollo, 6 chunks y 16 preguntas; validar etiquetas con una persona.")
+    print(f"\nAdvertencia: prueba de funcionamiento, {len(chunks)} chunks y {len(GOLDEN_DATASET)} preguntas; validar etiquetas con una persona.")
+    if len(chunks) in args.k:
+        print("Con k igual al tamaño del corpus se recupera todo: Hit Rate y Recall perfectos no demuestran calidad.")
     print("Los 3 casos sin respuesta se revisan aparte; no están incluidos en las métricas anteriores.")
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

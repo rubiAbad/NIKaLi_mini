@@ -2,6 +2,7 @@
 import streamlit as st
 from nikali.config import CHAT_MODEL, EMBED_MODEL, OLLAMA_HOST, TOP_K, make_client
 from nikali.rag import Retriever, load_chunks
+from nikali.preflight import StartupError, check_ollama
 from nikali.tutor import PROBLEM, STEPS, free_turn, guided_turn, new_session
 
 st.set_page_config(page_title="NIKaLi · Aprende paso a paso", page_icon="🌱", layout="wide")
@@ -11,7 +12,8 @@ st.set_page_config(page_title="NIKaLi · Aprende paso a paso", page_icon="🌱",
 def load_resources(chunks, model, host):
     # Los argumentos forman la clave de caché: cambiar texto, modelo o servidor
     # reconstruye el índice. El índice es de solo lectura; Retriever protege el acceso concurrente.
-    client = make_client()
+    check_ollama(make_client(host=host, timeout=5))
+    client = make_client(host=host)
     return client, Retriever(chunks, model)
 
 
@@ -42,7 +44,7 @@ with st.sidebar:
     debug_enabled = st.checkbox("Ver diagnóstico técnico (puede mostrar soluciones)", value=False)
     st.divider()
     st.caption("Prototipo local de tutoría. La evaluación automática puede equivocarse.")
-    st.caption("El material incluye un fragmento de Stewart y notas didácticas propias.")
+    st.caption("El material de consulta es únicamente el fragmento de Stewart.")
 
 session = st.session_state[key]
 if key == "guided":
@@ -58,17 +60,26 @@ if key == "guided":
             st.success("Terminaste. Puedes volver a practicar con «Reiniciar ejercicio».")
 else:
     st.subheader("Explora una idea")
-    st.write("Pregunta por la regla de la cadena, los ejemplos, el producto o el cociente.")
+    st.write("Pregunta por la regla de la cadena, la composición de funciones o la notación de Leibniz.")
     st.caption("La demostración completa todavía no está incluida en el material.")
 
 try:
     chunks = load_chunks()
     with st.spinner("Preparando el material de estudio…"):
         client, retriever = load_resources(chunks, EMBED_MODEL, OLLAMA_HOST)
-except Exception:
+except StartupError as exc:
+    st.error(str(exc))
+    st.caption("Corrige lo indicado y recarga la página. Tu progreso se conserva.")
+    st.stop()
+except FileNotFoundError as exc:
+    st.error(str(exc))
+    st.stop()
+except Exception as exc:
     st.error("No pude preparar el material. Comprueba las dependencias, los archivos del proyecto y la disponibilidad de BGE-M3 en la caché de Hugging Face o la conexión para descargarlo.")
     st.code("python -m pip install -r requirements.txt", language="bash")
-    st.caption("BGE-M3 se carga con Sentence Transformers. Ollama se usa únicamente para las respuestas de Qwen.")
+    st.caption("Ejecuta python verificar_entorno.py --modelos para identificar el problema.")
+    if debug_enabled:
+        st.exception(exc)
     st.stop()
 
 if not session["messages"]:
@@ -91,7 +102,7 @@ if debug_enabled:
 pending_key = f"pending_{key}"
 question = None
 if pending_key in st.session_state:
-    st.warning("El último turno no se completó. Tu progreso y conversación se conservaron.")
+    st.warning("El último turno no se completó. Tu progreso y conversación se conservaron. Comprueba que Ollama esté abierto y reintenta.")
     st.write(st.session_state[pending_key])
     retry, discard = st.columns(2)
     if retry.button("Reintentar", key="retry"):

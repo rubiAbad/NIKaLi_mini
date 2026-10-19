@@ -64,6 +64,16 @@ class AppTests(unittest.TestCase):
         self.assertFalse(app.chat_input[0].disabled)
         self.assertFalse(app.exception)
 
+    def test_missing_qwen_is_reported_before_loading_embeddings(self):
+        with patch.object(self.client, 'list', return_value={'models': []}):
+            app = self.app.run()
+        self.assertFalse(app.exception)
+        self.assertIn('ollama pull qwen2.5:3b', app.error[0].value)
+        self.assertEqual(self.encoder.calls, [])
+        app.run()
+        self.assertFalse(app.error)
+        self.assertEqual(len(app.chat_input), 1)
+
     def test_resource_failure_has_actionable_message(self):
         with patch.object(self.encoder, 'encode', side_effect=ConnectionError('offline')):
             app = self.app.run()

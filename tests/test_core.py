@@ -7,7 +7,7 @@ from unittest.mock import patch, Mock
 
 from evaluar_retrieval import evaluate as evaluate_retrieval, metrics
 from golden_dataset import GOLDEN_DATASET, UNANSWERABLE_CASES
-from nikali.config import make_embedder
+from nikali.config import make_embedder, settings
 from nikali.rag import Retriever, corpus_digest, cosine, load_chunks, split_markdown
 from nikali.tutor import PROBLEM, STEPS, evaluate, free_turn, guided_turn, new_session
 
@@ -17,6 +17,9 @@ class FakeClient:
     def __init__(self, replies=()):
         self.replies = list(replies)
         self.calls = []
+
+    def list(self):
+        return {"models": [{"model": "qwen2.5:3b"}]}
 
     def chat(self, **kwargs):
         self.calls.append(('chat', kwargs))
@@ -119,14 +122,15 @@ class RetrievalTests(unittest.TestCase):
     def test_corpus_labels_and_partial_source(self):
         chunks = load_chunks()
         ids = {c.id for c in chunks}
-        self.assertEqual(len(chunks), 6)
-        self.assertEqual(len(ids), 6)
+        self.assertEqual(len(chunks), 2)
+        self.assertEqual(len(ids), 2)
         self.assertEqual(sum(c.partial for c in chunks), 1)
+        self.assertTrue(all(c.id.startswith("stewart:") for c in chunks))
         for item in GOLDEN_DATASET:
             self.assertTrue(set(item['ids_relevantes']) <= ids)
             self.assertTrue(item['ids_relevantes'])
         self.assertTrue(all(not c['ids_relevantes'] for c in UNANSWERABLE_CASES))
-        self.assertEqual(len({c['id_pregunta'] for c in GOLDEN_DATASET + UNANSWERABLE_CASES}), 19)
+        self.assertEqual(len({c['id_pregunta'] for c in GOLDEN_DATASET + UNANSWERABLE_CASES}), 9)
 
     def test_splitter_preserves_math_and_ignores_code_headings(self):
         text = '# Uno\n$$x^2$$\n```python\n# comentario\n```\n## Dos\ntexto'
@@ -162,7 +166,7 @@ class RetrievalTests(unittest.TestCase):
         module.SentenceTransformer = constructor
         with patch.dict(sys.modules, {'sentence_transformers': module}):
             encoder = make_embedder()
-        constructor.assert_called_once_with('BAAI/bge-m3')
+        constructor.assert_called_once_with('BAAI/bge-m3', device=settings.EMBED_DEVICE, local_files_only=False)
         self.assertIsInstance(encoder, FakeEncoder)
 
     def test_metrics_multiple_relevant_and_rank(self):
@@ -184,7 +188,7 @@ class RetrievalTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             evaluate_retrieval(retriever, bad, 1)
         result = evaluate_retrieval(retriever, GOLDEN_DATASET, 1)
-        self.assertEqual(len(result['detalle']), 16)
+        self.assertEqual(len(result['detalle']), 6)
         self.assertEqual(len(corpus_digest(retriever.chunks)), 64)
 
 

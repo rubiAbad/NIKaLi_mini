@@ -6,7 +6,7 @@ import unicodedata
 from dataclasses import dataclass
 from threading import RLock
 
-from nikali.config import EMBED_MODEL, ROOT, TOP_K, make_embedder
+from nikali.config import CORPUS_PATH, EMBED_MODEL, ROOT, TOP_K, make_embedder
 
 
 @dataclass(frozen=True)
@@ -58,14 +58,14 @@ def split_markdown(text, source_id, source):
 
 
 def load_chunks():
-    fragment = ROOT / "output_marker/stewart_regla_cadena/fragmento_corregido.md"
-    original = split_markdown(fragment.read_text(encoding="utf-8"), "stewart", str(fragment.relative_to(ROOT)))
+    fragment = CORPUS_PATH
+    if not fragment.is_file():
+        raise FileNotFoundError(f"Falta el material del libro: {fragment}. Actualiza el repositorio conservando sus carpetas.")
+    original = split_markdown(fragment.read_text(encoding="utf-8"), "stewart", fragment.relative_to(ROOT).as_posix())
     # El fragmento original termina al empezar la demostración. No se completa
     # silenciosamente ni se atribuyen al libro explicaciones añadidas.
     original = tuple(Chunk(c.id, c.text, c.source, c.section, "demostracion" in c.id) for c in original)
-    notes = ROOT / "data/notas_didacticas.md"
-    supplemental = split_markdown(notes.read_text(encoding="utf-8"), "notas", "Notas didácticas del prototipo (elaboración propia)")
-    return original + supplemental
+    return original
 
 
 def corpus_digest(chunks):
