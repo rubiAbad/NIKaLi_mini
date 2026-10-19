@@ -1,0 +1,8 @@
+# Dependencias directas fijadas; las transitivas dependen de Python y la plataforma.
+streamlit==1.66.0
+ollama==0.6.3
+sentence-transformers==5.1.1
+qdrant-client==1.19.1
+python-dotenv==1.2.4
+# Sentence Transformers 5.1.1 usa la API de Transformers 4.
+transformers>=4.41,<5
