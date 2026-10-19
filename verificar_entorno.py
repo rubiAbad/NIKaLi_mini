@@ -35,15 +35,16 @@ def main(argv=None):
 
     from nikali.config import CHAT_MODEL, EMBED_MODEL, make_client, make_embedder, settings
     from nikali.preflight import check_ollama
-    from nikali.rag import Retriever, load_chunks
+    from nikali.index import load_prepared, open_retriever
     errors = 0
     chunks = None
     print(f'LLM: {CHAT_MODEL} | Embeddings: {EMBED_MODEL} | Dispositivo: {settings.EMBED_DEVICE}')
     try:
-        chunks = load_chunks()
+        prepared = load_prepared()
+        chunks = prepared.chunks
         if not chunks:
             raise ValueError('El material está vacío.')
-        print(f'[OK] Material del libro: {len(chunks)} chunks; {sum(c.partial for c in chunks)} parcial(es).')
+        print(f'[OK] Paquete preparado del libro: {len(chunks)} chunks; {sum(c.partial for c in chunks)} parcial(es).')
     except Exception as exc:
         errors += 1
         print(f'[ERROR] Material: {exc}')
@@ -58,7 +59,7 @@ def main(argv=None):
         try:
             print('Cargando BGE-M3 y probando Qdrant. La primera carga puede tardar...', flush=True)
             encoder = make_embedder(local_files_only=args.sin_descarga)
-            retriever = Retriever(chunks, encoder=encoder)
+            retriever = open_retriever(prepared, encoder=encoder, consumer='diagnostico')
             hits = retriever.search('¿Cuál es la regla de la cadena?')
             if not hits:
                 raise ValueError('Qdrant no devolvió resultados.')
@@ -69,7 +70,7 @@ def main(argv=None):
             print('Comprueba la conexión o la caché de Hugging Face, la RAM y las dependencias.')
         finally:
             if retriever is not None:
-                retriever.qdrant.close()
+                retriever.close()
     elif not args.modelos:
         print('[PENDIENTE] Pesos BGE-M3: python verificar_entorno.py --modelos')
     print('Diagnóstico terminado. La calidad de Qwen se revisa con evaluar_tutor.py.')

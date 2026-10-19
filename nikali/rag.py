@@ -84,48 +84,92 @@ def cosine(a, b):
     return sum(x*y for x, y in zip(a, b)) / (na * nb)
 
 
+def encode_texts(encoder, texts):
+    vectors = encoder.encode(texts, show_progress_bar=False, normalize_embeddings=True)
+    vectors = [list(map(float, vector)) for vector in vectors]
+    if len(vectors) != len(texts):
+        raise ValueError("BGE-M3 no devolvió todos los embeddings solicitados.")
+    return vectors
+
+
 class Retriever:
-    def __init__(self, chunks, model=EMBED_MODEL, *, encoder=None):
+    """Consulta vectores ya preparados. Nunca hace embeddings del corpus."""
+    def __init__(self, chunks, vectors, model=EMBED_MODEL, *, encoder=None,
+                 index_path=None, bundle_id=None):
+        from pathlib import Path
+        import weakref
         from qdrant_client import QdrantClient
         from qdrant_client.models import Distance, VectorParams, PointStruct
 
-        if not chunks:
-            raise ValueError("La base de conocimiento está vacía.")
+        if not chunks or len(chunks) != len(vectors):
+            raise ValueError("Chunks vacíos o cantidad de vectores incompatible.")
         self.chunks, self.model = tuple(chunks), model
-        self.encoder = encoder if encoder is not None else make_embedder(model)
+        self.encoder = encoder  # BGE-M3 se carga solo al hacer la primera consulta.
         self._lock = RLock()
-        self.vectors = self._embed([c.text for c in self.chunks])
-        for vector in self.vectors:
-            cosine(self.vectors[0], vector)
-        self.qdrant = QdrantClient(":memory:", force_disable_check_same_thread=True)
-        self.qdrant.create_collection(
-            collection_name="nikali",
-            vectors_config=VectorParams(size=len(self.vectors[0]), distance=Distance.COSINE),
-        )
-        self.qdrant.upsert(collection_name="nikali", points=[
-            PointStruct(id=i, vector=v, payload={"chunk_id": c.id, "source": c.source})
-            for i, (c, v) in enumerate(zip(self.chunks, self.vectors))
-        ])
+        self.vectors = vectors
+        for vector in vectors:
+            cosine(vectors[0], vector)
+        marker = None
+        if index_path is not None:
+            index_path = Path(index_path)
+            index_path.mkdir(parents=True, exist_ok=True)
+            marker = index_path / "ready.txt"
+            if not bundle_id:
+                raise ValueError("El índice persistente requiere identidad del paquete.")
+        try:
+            self.qdrant = QdrantClient(path=str(index_path), force_disable_check_same_thread=True) if index_path else QdrantClient(":memory:", force_disable_check_same_thread=True)
+        except RuntimeError as exc:
+            raise RuntimeError(f"No se pudo abrir Qdrant en {index_path}. Cierra otra instancia que use ese índice y reintenta.") from exc
+        self._finalizer = weakref.finalize(self, self.qdrant.close)
+        try:
+            if marker and marker.exists():
+                if marker.read_text(encoding="utf-8").strip() != bundle_id:
+                    raise ValueError("La identidad del índice no coincide con el paquete.")
+                config = self.qdrant.get_collection("nikali").config.params.vectors
+                records = self.qdrant.retrieve("nikali", ids=list(range(len(chunks))), with_payload=True)
+                if (config.size != len(vectors[0]) or config.distance != Distance.COSINE
+                        or self.qdrant.count("nikali").count != len(chunks)
+                        or len(records) != len(chunks)
+                        or any(r.payload.get("chunk_id") != chunks[int(r.id)].id for r in records)):
+                    raise ValueError("Índice local incompleto o incompatible con el paquete.")
+            else:
+                # Si una importación se interrumpió, se repite desde los vectores
+                # guardados. No hay una llamada al modelo de embeddings.
+                if self.qdrant.collection_exists("nikali"):
+                    self.qdrant.delete_collection("nikali")
+                self.qdrant.create_collection(
+                    collection_name="nikali",
+                    vectors_config=VectorParams(size=len(vectors[0]), distance=Distance.COSINE),
+                )
+                self.qdrant.upsert(collection_name="nikali", points=[
+                    PointStruct(id=i, vector=v, payload={"chunk_id": c.id, "source": c.source})
+                    for i, (c, v) in enumerate(zip(chunks, vectors))
+                ])
+                if marker:
+                    marker.write_text(bundle_id, encoding="utf-8")
+        except Exception:
+            self.close()
+            raise
 
-    def _embed(self, texts):
-        # Documentos y consultas usan la misma instancia de SentenceTransformer.
-        vectors = self.encoder.encode(texts, show_progress_bar=False)
-        vectors = [list(map(float, vector)) for vector in vectors]
-        if len(vectors) != len(texts):
-            raise ValueError("BGE-M3 no devolvió todos los embeddings solicitados.")
-        return vectors
+    def close(self):
+        self._finalizer()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
 
     def search(self, question, k=TOP_K):
         if not question.strip() or k < 1:
             raise ValueError("Escribe una consulta y usa k >= 1.")
-        # Streamlit comparte este recurso entre reruns/hilos. Serializamos el
-        # acceso al encoder y al cliente local; nunca modificamos el índice aquí.
         with self._lock:
-            query = self._embed([question])[0]
-            cosine(self.vectors[0], query)  # valida tamaño y valores antes de consultar
+            if self.encoder is None:
+                self.encoder = make_embedder(self.model)
+            query = encode_texts(self.encoder, [question])[0]
+            cosine(self.vectors[0], query)
             points = self.qdrant.query_points(
-                collection_name="nikali", query=query, limit=k,
-                with_payload=True,
+                collection_name="nikali", query=query, limit=k, with_payload=True,
             ).points
         return [Hit(self.chunks[int(point.id)], point.score) for point in points]
 

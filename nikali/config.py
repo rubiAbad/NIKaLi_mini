@@ -28,6 +28,11 @@ CHAT_MODEL = settings.CHAT_MODEL
 EMBED_MODEL = settings.EMBED_MODEL
 OLLAMA_HOST = settings.OLLAMA_HOST
 TOP_K = settings.TOP_K
+# Fijar la misma revisión evita mezclar vectores de pesos diferentes.
+EMBED_REVISION = "5617a9f61b028005a4858fdac845db406aefb181"
+EMBED_DIMENSION = 1024
+PREPARED_PATH = ROOT / "data/rag_preparado.json"
+INDEX_CACHE = ROOT / ".nikali_index"
 CORPUS_PATH = ROOT / "output_marker/stewart_regla_cadena/fragmento_corregido.md"
 
 
@@ -41,5 +46,5 @@ def make_embedder(model=EMBED_MODEL, *, local_files_only=False):
     """Reutiliza la caché; el diagnóstico puede impedir descargas."""
     from sentence_transformers import SentenceTransformer
 
-    return SentenceTransformer(model, device=settings.EMBED_DEVICE,
+    return SentenceTransformer(model, device=settings.EMBED_DEVICE, revision=EMBED_REVISION,
                                local_files_only=local_files_only)

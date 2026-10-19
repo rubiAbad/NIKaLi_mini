@@ -7,7 +7,7 @@ from unittest.mock import patch, Mock
 
 from evaluar_retrieval import evaluate as evaluate_retrieval, metrics
 from golden_dataset import GOLDEN_DATASET, UNANSWERABLE_CASES
-from nikali.config import make_embedder, settings
+from nikali.config import make_embedder, settings, EMBED_REVISION
 from nikali.rag import Retriever, corpus_digest, cosine, load_chunks, split_markdown
 from nikali.tutor import PROBLEM, STEPS, evaluate, free_turn, guided_turn, new_session
 
@@ -49,7 +49,7 @@ class TutorTests(unittest.TestCase):
     def setUp(self):
         self.session = new_session()
         self.client = FakeClient()
-        self.retriever = Retriever(load_chunks(), encoder=FakeEncoder())
+        self.retriever = Retriever(load_chunks(), [[1.0, 0.0], [0.0, 1.0]], encoder=FakeEncoder())
 
     def test_evaluator_gets_problem_reference_and_accepted_history(self):
         self.session['step'] = 1
@@ -151,14 +151,14 @@ class RetrievalTests(unittest.TestCase):
     def test_search_ranking_uses_qdrant_and_same_encoder(self):
         encoder = FakeEncoder()
         chunks = load_chunks()[:2]
-        with patch.object(encoder, 'encode', side_effect=[[[1, 0], [0, 1]], [[0, 1]]]) as encode:
-            retriever = Retriever(chunks, encoder=encoder)
+        with patch.object(encoder, 'encode', side_effect=[[[0, 1]]]) as encode:
+            retriever = Retriever(chunks, [[1.0, 0.0], [0.0, 1.0]], encoder=encoder)
             hits = retriever.search('consulta', k=1)
         self.assertEqual(hits[0].chunk.id, chunks[1].id)
         self.assertAlmostEqual(hits[0].score, 1.0)
         self.assertEqual(retriever.qdrant.count('nikali').count, 2)
-        self.assertEqual(encode.call_args_list[0].args[0], [c.text for c in chunks])
-        self.assertEqual(encode.call_args_list[1].args[0], ['consulta'])
+        self.assertEqual(len(encode.call_args_list), 1)
+        self.assertEqual(encode.call_args_list[0].args[0], ['consulta'])
 
     def test_default_factory_requests_original_bge_model(self):
         constructor = Mock(return_value=FakeEncoder())
@@ -166,7 +166,7 @@ class RetrievalTests(unittest.TestCase):
         module.SentenceTransformer = constructor
         with patch.dict(sys.modules, {'sentence_transformers': module}):
             encoder = make_embedder()
-        constructor.assert_called_once_with('BAAI/bge-m3', device=settings.EMBED_DEVICE, local_files_only=False)
+        constructor.assert_called_once_with('BAAI/bge-m3', device=settings.EMBED_DEVICE, revision=EMBED_REVISION, local_files_only=False)
         self.assertIsInstance(encoder, FakeEncoder)
 
     def test_metrics_multiple_relevant_and_rank(self):
@@ -181,7 +181,7 @@ class RetrievalTests(unittest.TestCase):
             metrics(['x'], [], 1)
 
     def test_evaluation_rejects_unknown_labels_and_excessive_k(self):
-        retriever = Retriever(load_chunks(), encoder=FakeEncoder())
+        retriever = Retriever(load_chunks(), [[1.0, 0.0], [0.0, 1.0]], encoder=FakeEncoder())
         with self.assertRaises(ValueError):
             evaluate_retrieval(retriever, GOLDEN_DATASET, 7)
         bad = [{'id_pregunta': 'BAD', 'ids_relevantes': ['missing']}]
