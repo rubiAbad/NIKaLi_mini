@@ -1,12 +1,12 @@
 """Consola opcional que comparte la lógica del tutor web."""
 from nikali.config import make_client
-from nikali.rag import Retriever, load_chunks
+from nikali.index import open_retriever
 from nikali.tutor import PROBLEM, STEPS, guided_turn, new_session
 
 
 def main():
     client = make_client()
-    retriever = Retriever(load_chunks())
+    retriever = open_retriever()
     session = new_session()
     print(PROBLEM)
     print(STEPS[0].instruction)

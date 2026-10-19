@@ -6,7 +6,8 @@ from pathlib import Path
 
 from golden_dataset import GOLDEN_DATASET, UNANSWERABLE_CASES
 from nikali.config import EMBED_MODEL, TOP_K
-from nikali.rag import Retriever, corpus_digest, load_chunks
+from nikali.rag import corpus_digest
+from nikali.index import load_prepared, open_retriever
 
 
 def metrics(retrieved, relevant, k):
@@ -44,11 +45,13 @@ def main():
     parser.add_argument("--k", type=int, nargs="+", default=[TOP_K])
     parser.add_argument("--output", type=Path, help="Guardar informe JSON, por ejemplo results/retrieval.json")
     args = parser.parse_args()
-    chunks = load_chunks()
+    prepared = load_prepared()
+    chunks = prepared.chunks
     if any(k < 1 or k > len(chunks) for k in args.k):
         parser.error(f"k debe estar entre 1 y {len(chunks)}")
-    retriever = Retriever(chunks)
+    retriever = open_retriever(prepared)
     report = {"fecha_utc": datetime.now(timezone.utc).isoformat(), "embedding_model": EMBED_MODEL,
+              "paquete_sha256": prepared.digest, "embedding_revision": prepared.manifest["embedding"]["revision"],
               "corpus_sha256": corpus_digest(chunks), "chunk_ids": [c.id for c in chunks],
               "top_k_web": TOP_K, "nota": "Solo libro: prueba de funcionamiento con dos chunks, no validación de calidad. Con k=2 se recupera todo el corpus.",
               "resultados": [evaluate(retriever, GOLDEN_DATASET, k) for k in args.k]}

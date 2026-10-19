@@ -5,6 +5,8 @@ import streamlit as st
 from streamlit.testing.v1 import AppTest
 from test_core import FakeClient, FakeEncoder, verdict
 from nikali.config import ROOT
+from nikali.rag import Retriever, load_chunks
+from nikali.index import PreparedCorpus
 
 
 class AppTests(unittest.TestCase):
@@ -14,6 +16,13 @@ class AppTests(unittest.TestCase):
         self.patcher = patch('nikali.config.make_client', return_value=self.client)
         self.patcher.start()
         self.encoder = FakeEncoder()
+        prepared = PreparedCorpus(load_chunks(), ((1.0, 0.0), (0.0, 1.0)), "test", {})
+        self.prepared_patcher = patch("nikali.index.load_prepared", return_value=prepared)
+        self.prepared_patcher.start()
+        self.addCleanup(self.prepared_patcher.stop)
+        self.open_patcher = patch("nikali.index.open_retriever", side_effect=lambda data, **kw: Retriever(data.chunks, data.vectors, encoder=self.encoder))
+        self.open_patcher.start()
+        self.addCleanup(self.open_patcher.stop)
         self.embed_patcher = patch("nikali.rag.make_embedder", return_value=self.encoder)
         self.embed_patcher.start()
         self.addCleanup(self.embed_patcher.stop)
@@ -75,7 +84,7 @@ class AppTests(unittest.TestCase):
         self.assertEqual(len(app.chat_input), 1)
 
     def test_resource_failure_has_actionable_message(self):
-        with patch.object(self.encoder, 'encode', side_effect=ConnectionError('offline')):
+        with patch('nikali.index.open_retriever', side_effect=ConnectionError('offline')):
             app = self.app.run()
         self.assertFalse(app.exception)
         self.assertTrue(app.error)

@@ -1,7 +1,7 @@
 """Interfaz local: streamlit run app.py."""
 import streamlit as st
 from nikali.config import CHAT_MODEL, EMBED_MODEL, OLLAMA_HOST, TOP_K, make_client
-from nikali.rag import Retriever, load_chunks
+from nikali.index import PreparedIndexError, load_prepared, open_retriever
 from nikali.preflight import StartupError, check_ollama
 from nikali.tutor import PROBLEM, STEPS, free_turn, guided_turn, new_session
 
@@ -9,12 +9,11 @@ st.set_page_config(page_title="NIKaLi · Aprende paso a paso", page_icon="🌱",
 
 
 @st.cache_resource(show_spinner=False)
-def load_resources(chunks, model, host):
-    # Los argumentos forman la clave de caché: cambiar texto, modelo o servidor
-    # reconstruye el índice. El índice es de solo lectura; Retriever protege el acceso concurrente.
+def load_resources(prepared, host):
+    # Se cargan vectores preparados; nunca se recalcula el corpus al abrir la web.
     check_ollama(make_client(host=host, timeout=5))
     client = make_client(host=host)
-    return client, Retriever(chunks, model)
+    return client, open_retriever(prepared, consumer="web")
 
 
 def show_hits(hits):
@@ -64,10 +63,11 @@ else:
     st.caption("La demostración completa todavía no está incluida en el material.")
 
 try:
-    chunks = load_chunks()
-    with st.spinner("Preparando el material de estudio…"):
-        client, retriever = load_resources(chunks, EMBED_MODEL, OLLAMA_HOST)
-except StartupError as exc:
+    prepared = load_prepared()
+    chunks = prepared.chunks
+    with st.spinner("Cargando el material preparado…"):
+        client, retriever = load_resources(prepared, OLLAMA_HOST)
+except (StartupError, PreparedIndexError) as exc:
     st.error(str(exc))
     st.caption("Corrige lo indicado y recarga la página. Tu progreso se conserva.")
     st.stop()
@@ -102,7 +102,7 @@ if debug_enabled:
 pending_key = f"pending_{key}"
 question = None
 if pending_key in st.session_state:
-    st.warning("El último turno no se completó. Tu progreso y conversación se conservaron. Comprueba que Ollama esté abierto y reintenta.")
+    st.warning("El último turno no se completó. Tu progreso y conversación se conservaron. Comprueba Ollama y la disponibilidad de BGE-M3 para las consultas. Ejecuta verificar_entorno.py --modelos si el problema continúa.")
     st.write(st.session_state[pending_key])
     retry, discard = st.columns(2)
     if retry.button("Reintentar", key="retry"):
