@@ -1,7 +1,12 @@
 import json
 import math
+from pathlib import Path
+
 import ollama
 import streamlit as st
+
+BASE_DIR = Path(__file__).resolve().parent
+DATA_PATH = BASE_DIR / "output_marker" / "stewart_regla_cadena" / "fragmento_corregido.md"
 
 # ==========================================
 # CONFIGURACIÓN DE LA PÁGINA
@@ -51,11 +56,14 @@ def cargar_rag():
     """Carga el documento, genera embeddings con Ollama y construye el índice en memoria.
     @st.cache_resource garantiza que se ejecuta una sola vez por sesión de servidor.
     """
-    with open(
-        "output_marker/stewart_regla_cadena/fragmento_corregido.md",
-        "r",
-        encoding="utf-8",
-    ) as f:
+    if not DATA_PATH.exists():
+        raise FileNotFoundError(
+            "No se encontró el archivo del corpus RAG. "
+            f"Esperado en: {DATA_PATH}. "
+            "Asegúrate de ejecutar la app desde la raíz del proyecto o de mantener la estructura del repositorio."
+        )
+
+    with DATA_PATH.open("r", encoding="utf-8") as f:
         markdown_document = f.read()
 
     chunks = _split_markdown(markdown_document)
@@ -201,7 +209,7 @@ with st.sidebar:
             key="sidebar_chunk_text",
         )
     else:
-        st.info("Aquí aparecerá el fragmento recuperado.")
+        st.info("Aqu�� aparecerá el fragmento recuperado.")
 
     st.subheader("🔍 Diagnóstico del Evaluador")
     if debug["estado"] is not None:
