@@ -1,87 +1,75 @@
-from langchain_text_splitters import MarkdownHeaderTextSplitter
-from sentence_transformers import SentenceTransformer
-from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct
+"""Evaluación del MISMO retrieval utilizado en app.py. Requiere Ollama local."""
+import argparse
+import json
+from datetime import datetime, timezone
+from pathlib import Path
 
-# 1. Preparar la Base Vectorial (Repetimos el proceso rápido)
-with open("output_marker/stewart_regla_cadena/fragmento_corregido.md", "r", encoding="utf-8") as f:
-    markdown_document = f.read()
+from golden_dataset import GOLDEN_DATASET, UNANSWERABLE_CASES
+from nikali.config import EMBED_MODEL, TOP_K, make_client
+from nikali.rag import Retriever, corpus_digest, load_chunks
 
-markdown_splitter = MarkdownHeaderTextSplitter(
-    headers_to_split_on=[("#", "C"), ("##", "S"), ("###", "T")], 
-    strip_headers=False
-)
-chunks = markdown_splitter.split_text(markdown_document)
 
-embedding_model = SentenceTransformer("BAAI/bge-m3")
-embeddings = embedding_model.encode([c.page_content for c in chunks])
+def metrics(retrieved, relevant, k):
+    if k < 1 or not relevant:
+        raise ValueError("Las métricas requieren k >= 1 y al menos un chunk relevante.")
+    # No contar IDs duplicados como aciertos adicionales.
+    ranked = list(dict.fromkeys(retrieved))[:k]
+    relevant = set(relevant)
+    hits = len(set(ranked) & relevant)
+    first = next((i for i, item in enumerate(ranked, 1) if item in relevant), None)
+    return {"hit_rate": float(hits > 0), "precision": hits / k,
+            "recall": hits / len(relevant), "mrr": 1 / first if first else 0.0}
 
-qdrant_client = QdrantClient(":memory:")
-qdrant_client.create_collection(
-    collection_name="stewart",
-    vectors_config=VectorParams(size=embeddings.shape[1], distance=Distance.COSINE),
-)
 
-# Insertar asignando un ID numérico (Chunk 0 y Chunk 1)
-qdrant_client.upsert(
-    collection_name="stewart", 
-    points=[PointStruct(id=i, vector=v.tolist(), payload={"text": c.page_content}) for i, (c, v) in enumerate(zip(chunks, embeddings))]
-)
-
-# =======================================================
-# 2. CAPA DE EVALUACIÓN (GOLDEN DATASET)
-# =======================================================
-# Definimos preguntas y el ID del chunk que DEBERÍA responderlas.
-# Chunk 0 = Teoría y fórmula Leibniz. Chunk 1 = Demostración con Deltas.
-
-golden_dataset = [
-    {"pregunta": "¿Cuál es la fórmula de la regla de la cadena en notación de Leibniz?", "id_esperado": 0},
-    {"pregunta": "¿Cómo se demuestra usando el cambio en Delta u y Delta x?", "id_esperado": 1},
-    {"pregunta": "Si u cambia al doble de rapidez que x, ¿qué pasa con y?", "id_esperado": 0}
-]
-
-def evaluar_metricas(k, dataset):
-    total_preguntas = len(dataset)
-    hits = 0
-    suma_precision = 0
-    suma_recall = 0
-
-    print(f"\n--- EVALUANDO EN TOP K={k} ---")
-    
+def evaluate(retriever, dataset, k):
+    if not dataset or not 1 <= k <= len(retriever.chunks):
+        raise ValueError("Dataset vacío o k fuera del tamaño del corpus.")
+    available = {c.id for c in retriever.chunks}
     for item in dataset:
-        # Vectorizar pregunta y buscar en Qdrant
-        query_vector = embedding_model.encode([item["pregunta"]])[0].tolist()
-        resultados = qdrant_client.query_points(
-            collection_name="stewart", 
-            query=query_vector, 
-            limit=k
-        ).points
-        
-        # Obtener los IDs de los chunks recuperados
-        ids_recuperados = [res.id for res in resultados]
-        id_correcto = item["id_esperado"]
-        
-        # Calcular si fue un Hit (Acierto)
-        if id_correcto in ids_recuperados:
-            hits += 1
-            # Precision: (Chunks relevantes recuperados) / (Total de chunks recuperados)
-            suma_precision += 1 / k
-            # Recall: (Chunks relevantes recuperados) / (Total de chunks relevantes que existen) -> (1/1)
-            suma_recall += 1 / 1
-            print(f"✅ ¡Acierto! La pregunta '{item['pregunta'][:30]}...' recuperó el ID {id_correcto}.")
-        else:
-            print(f"❌ Fallo. La pregunta '{item['pregunta'][:30]}...' NO trajo el ID {id_correcto}.")
+        if not item["ids_relevantes"] or not set(item["ids_relevantes"]) <= available:
+            raise ValueError(f"Etiquetas inválidas en {item['id_pregunta']}.")
+    rows = []
+    for item in dataset:
+        hits = retriever.search(item["pregunta"], k=k)
+        ids = [h.chunk.id for h in hits]
+        rows.append({**item, "ids_recuperados": ids, "scores": [h.score for h in hits],
+                     **metrics(ids, item["ids_relevantes"], k)})
+    aggregate = {name: sum(r[name] for r in rows) / len(rows)
+                 for name in ("hit_rate", "precision", "recall", "mrr")}
+    return {"k": k, "n_preguntas": len(rows), "metricas": aggregate, "detalle": rows}
 
-    # Promediar métricas
-    hit_rate = (hits / total_preguntas) * 100
-    precision = (suma_precision / total_preguntas) * 100
-    recall = (suma_recall / total_preguntas) * 100
 
-    print(f"\n📊 RESULTADOS (K={k}):")
-    print(f"   Hit Rate@{k}:  {hit_rate:.1f}%")
-    print(f"   Precision@{k}: {precision:.1f}%")
-    print(f"   Recall@{k}:    {recall:.1f}%")
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--k", type=int, nargs="+", default=[TOP_K, 2])
+    parser.add_argument("--output", type=Path, help="Guardar informe JSON, por ejemplo results/retrieval.json")
+    args = parser.parse_args()
+    chunks = load_chunks()
+    if any(k < 1 or k > len(chunks) for k in args.k):
+        parser.error(f"k debe estar entre 1 y {len(chunks)}")
+    retriever = Retriever(make_client(), chunks)
+    report = {"fecha_utc": datetime.now(timezone.utc).isoformat(), "embedding_model": EMBED_MODEL,
+              "corpus_sha256": corpus_digest(chunks), "chunk_ids": [c.id for c in chunks],
+              "top_k_web": TOP_K, "nota": "Conjunto de desarrollo pequeño; no demuestra generalización.",
+              "resultados": [evaluate(retriever, GOLDEN_DATASET, k) for k in args.k]}
+    # Recuperar siempre un vecino NO prueba que exista una respuesta. Estos casos
+    # requieren revisión de la abstención del generador, no un recall ficticio.
+    report["sin_respuesta_revision_manual"] = [
+        {**item, "ids_recuperados": [h.chunk.id for h in retriever.search(item["pregunta"])],
+         "nota": "Inspeccionar en Exploración: debería reconocer falta de evidencia."}
+        for item in UNANSWERABLE_CASES
+    ]
+    for run in report["resultados"]:
+        print(f"\nTop {run['k']} · {run['n_preguntas']} preguntas")
+        for name, value in run["metricas"].items():
+            print(f"  {name}: {value:.3f}")
+    print("\nAdvertencia: benchmark de desarrollo, 6 chunks y 16 preguntas; validar etiquetas con una persona.")
+    print("Los 3 casos sin respuesta se revisan aparte; no están incluidos en las métricas anteriores.")
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"Informe: {args.output}")
 
-# 3. Ejecutar Evaluación para K=1 y K=2
-evaluar_metricas(k=1, dataset=golden_dataset)
-evaluar_metricas(k=2, dataset=golden_dataset)
+
+if __name__ == "__main__":
+    main()
