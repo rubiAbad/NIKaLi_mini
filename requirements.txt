@@ -1,2 +1,4 @@
 streamlit>=1.40,<2
 ollama>=0.4,<1
+sentence-transformers>=3,<6
+qdrant-client>=1.10,<2

@@ -10,9 +10,9 @@ st.set_page_config(page_title="NIKaLi · Aprende paso a paso", page_icon="🌱",
 @st.cache_resource(show_spinner=False)
 def load_resources(chunks, model, host):
     # Los argumentos forman la clave de caché: cambiar texto, modelo o servidor
-    # reconstruye el índice. Solo recursos inmutables son compartidos entre usuarios.
+    # reconstruye el índice. El índice es de solo lectura; Retriever protege el acceso concurrente.
     client = make_client()
-    return client, Retriever(client, chunks, model)
+    return client, Retriever(chunks, model)
 
 
 def show_hits(hits):
@@ -66,9 +66,9 @@ try:
     with st.spinner("Preparando el material de estudio…"):
         client, retriever = load_resources(chunks, EMBED_MODEL, OLLAMA_HOST)
 except Exception:
-    st.error("No pude preparar el material. Comprueba que Ollama esté iniciado, que los modelos estén descargados y que los archivos del proyecto estén completos.")
-    st.code("ollama pull nomic-embed-text\nollama pull qwen2.5:3b\nollama serve", language="bash")
-    st.caption("Si configuraste otros modelos, descarga esos nombres. Si Ollama ya está abierto, no necesitas iniciar otro servidor.")
+    st.error("No pude preparar el material. Comprueba las dependencias, los archivos del proyecto y la disponibilidad de BGE-M3 en la caché de Hugging Face o la conexión para descargarlo.")
+    st.code("python -m pip install -r requirements.txt", language="bash")
+    st.caption("BGE-M3 se carga con Sentence Transformers. Ollama se usa únicamente para las respuestas de Qwen.")
     st.stop()
 
 if not session["messages"]:

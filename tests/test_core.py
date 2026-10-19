@@ -1,23 +1,22 @@
 import json
+import sys
+import types
 import unittest
 from copy import deepcopy
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 from evaluar_retrieval import evaluate as evaluate_retrieval, metrics
 from golden_dataset import GOLDEN_DATASET, UNANSWERABLE_CASES
+from nikali.config import make_embedder
 from nikali.rag import Retriever, corpus_digest, cosine, load_chunks, split_markdown
 from nikali.tutor import PROBLEM, STEPS, evaluate, free_turn, guided_turn, new_session
 
 
 class FakeClient:
-    """Dobles de prueba: NO evalúan la calidad real de Qwen ni de nomic."""
+    """Dobles de prueba: NO evalúan la calidad real de Qwen."""
     def __init__(self, replies=()):
         self.replies = list(replies)
         self.calls = []
-
-    def embed(self, **kwargs):
-        self.calls.append(('embed', kwargs))
-        return {"embeddings": [[1.0, float(len(t) % 7 + 1)] for t in kwargs['input']]}
 
     def chat(self, **kwargs):
         self.calls.append(('chat', kwargs))
@@ -29,6 +28,16 @@ class FakeClient:
         return {'message': {'content': reply}}
 
 
+class FakeEncoder:
+    """Sustituye BGE-M3 en pruebas; Qdrant sí se ejecuta realmente."""
+    def __init__(self):
+        self.calls = []
+
+    def encode(self, texts, **kwargs):
+        self.calls.append((texts, kwargs))
+        return [[1.0, float(len(t) % 7 + 1)] for t in texts]
+
+
 def verdict(state):
     return json.dumps({'estado': state, 'motivo': 'Diagnóstico simulado'})
 
@@ -37,7 +46,7 @@ class TutorTests(unittest.TestCase):
     def setUp(self):
         self.session = new_session()
         self.client = FakeClient()
-        self.retriever = Retriever(self.client, load_chunks())
+        self.retriever = Retriever(load_chunks(), encoder=FakeEncoder())
 
     def test_evaluator_gets_problem_reference_and_accepted_history(self):
         self.session['step'] = 1
@@ -135,15 +144,26 @@ class RetrievalTests(unittest.TestCase):
                 cosine(a, b)
         self.assertAlmostEqual(cosine([1, 0], [1, 0]), 1)
 
-    def test_search_ranking_uses_cosine_and_same_model(self):
-        client = FakeClient()
+    def test_search_ranking_uses_qdrant_and_same_encoder(self):
+        encoder = FakeEncoder()
         chunks = load_chunks()[:2]
-        with patch.object(client, 'embed', side_effect=[{'embeddings': [[1, 0], [0, 1]]}, {'embeddings': [[0, 1]]}]) as embed:
-            retriever = Retriever(client, chunks, model='chosen')
+        with patch.object(encoder, 'encode', side_effect=[[[1, 0], [0, 1]], [[0, 1]]]) as encode:
+            retriever = Retriever(chunks, encoder=encoder)
             hits = retriever.search('consulta', k=1)
         self.assertEqual(hits[0].chunk.id, chunks[1].id)
-        self.assertTrue(all(c.kwargs['model'] == 'chosen' for c in embed.call_args_list))
-        self.assertFalse(embed.call_args_list[0].kwargs['truncate'])
+        self.assertAlmostEqual(hits[0].score, 1.0)
+        self.assertEqual(retriever.qdrant.count('nikali').count, 2)
+        self.assertEqual(encode.call_args_list[0].args[0], [c.text for c in chunks])
+        self.assertEqual(encode.call_args_list[1].args[0], ['consulta'])
+
+    def test_default_factory_requests_original_bge_model(self):
+        constructor = Mock(return_value=FakeEncoder())
+        module = types.ModuleType('sentence_transformers')
+        module.SentenceTransformer = constructor
+        with patch.dict(sys.modules, {'sentence_transformers': module}):
+            encoder = make_embedder()
+        constructor.assert_called_once_with('BAAI/bge-m3')
+        self.assertIsInstance(encoder, FakeEncoder)
 
     def test_metrics_multiple_relevant_and_rank(self):
         result = metrics(['irrelevant', 'b', 'c'], ['b', 'c', 'd'], 3)
@@ -157,7 +177,7 @@ class RetrievalTests(unittest.TestCase):
             metrics(['x'], [], 1)
 
     def test_evaluation_rejects_unknown_labels_and_excessive_k(self):
-        retriever = Retriever(FakeClient(), load_chunks())
+        retriever = Retriever(load_chunks(), encoder=FakeEncoder())
         with self.assertRaises(ValueError):
             evaluate_retrieval(retriever, GOLDEN_DATASET, 7)
         bad = [{'id_pregunta': 'BAD', 'ids_relevantes': ['missing']}]

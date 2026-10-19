@@ -1,11 +1,11 @@
-"""Evaluación del MISMO retrieval utilizado en app.py. Requiere Ollama local."""
+"""Evaluación del MISMO retrieval utilizado en app.py. Usa BGE-M3 local; no requiere Ollama."""
 import argparse
 import json
 from datetime import datetime, timezone
 from pathlib import Path
 
 from golden_dataset import GOLDEN_DATASET, UNANSWERABLE_CASES
-from nikali.config import EMBED_MODEL, TOP_K, make_client
+from nikali.config import EMBED_MODEL, TOP_K
 from nikali.rag import Retriever, corpus_digest, load_chunks
 
 
@@ -47,7 +47,7 @@ def main():
     chunks = load_chunks()
     if any(k < 1 or k > len(chunks) for k in args.k):
         parser.error(f"k debe estar entre 1 y {len(chunks)}")
-    retriever = Retriever(make_client(), chunks)
+    retriever = Retriever(chunks)
     report = {"fecha_utc": datetime.now(timezone.utc).isoformat(), "embedding_model": EMBED_MODEL,
               "corpus_sha256": corpus_digest(chunks), "chunk_ids": [c.id for c in chunks],
               "top_k_web": TOP_K, "nota": "Conjunto de desarrollo pequeño; no demuestra generalización.",

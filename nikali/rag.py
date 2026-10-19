@@ -4,8 +4,9 @@ import math
 import re
 import unicodedata
 from dataclasses import dataclass
+from threading import RLock
 
-from nikali.config import EMBED_MODEL, ROOT, TOP_K
+from nikali.config import EMBED_MODEL, ROOT, TOP_K, make_embedder
 
 
 @dataclass(frozen=True)
@@ -84,27 +85,49 @@ def cosine(a, b):
 
 
 class Retriever:
-    def __init__(self, client, chunks, model=EMBED_MODEL):
+    def __init__(self, chunks, model=EMBED_MODEL, *, encoder=None):
+        from qdrant_client import QdrantClient
+        from qdrant_client.models import Distance, VectorParams, PointStruct
+
         if not chunks:
             raise ValueError("La base de conocimiento está vacía.")
-        self.client, self.chunks, self.model = client, tuple(chunks), model
+        self.chunks, self.model = tuple(chunks), model
+        self.encoder = encoder if encoder is not None else make_embedder(model)
+        self._lock = RLock()
         self.vectors = self._embed([c.text for c in self.chunks])
         for vector in self.vectors:
             cosine(self.vectors[0], vector)
+        self.qdrant = QdrantClient(":memory:", force_disable_check_same_thread=True)
+        self.qdrant.create_collection(
+            collection_name="nikali",
+            vectors_config=VectorParams(size=len(self.vectors[0]), distance=Distance.COSINE),
+        )
+        self.qdrant.upsert(collection_name="nikali", points=[
+            PointStruct(id=i, vector=v, payload={"chunk_id": c.id, "source": c.source})
+            for i, (c, v) in enumerate(zip(self.chunks, self.vectors))
+        ])
 
     def _embed(self, texts):
-        result = self.client.embed(model=self.model, input=texts, truncate=False)
-        vectors = result["embeddings"]
+        # Documentos y consultas usan la misma instancia de SentenceTransformer.
+        vectors = self.encoder.encode(texts, show_progress_bar=False)
+        vectors = [list(map(float, vector)) for vector in vectors]
         if len(vectors) != len(texts):
-            raise ValueError("Ollama no devolvió todos los embeddings solicitados.")
+            raise ValueError("BGE-M3 no devolvió todos los embeddings solicitados.")
         return vectors
 
     def search(self, question, k=TOP_K):
         if not question.strip() or k < 1:
             raise ValueError("Escribe una consulta y usa k >= 1.")
-        query = self._embed([question])[0]
-        ranked = [Hit(c, cosine(query, v)) for c, v in zip(self.chunks, self.vectors)]
-        return sorted(ranked, key=lambda h: (-h.score, h.chunk.id))[:k]
+        # Streamlit comparte este recurso entre reruns/hilos. Serializamos el
+        # acceso al encoder y al cliente local; nunca modificamos el índice aquí.
+        with self._lock:
+            query = self._embed([question])[0]
+            cosine(self.vectors[0], query)  # valida tamaño y valores antes de consultar
+            points = self.qdrant.query_points(
+                collection_name="nikali", query=query, limit=k,
+                with_payload=True,
+            ).points
+        return [Hit(self.chunks[int(point.id)], point.score) for point in points]
 
 
 def evidence(hits):

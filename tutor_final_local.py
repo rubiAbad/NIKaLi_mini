@@ -6,7 +6,7 @@ from nikali.tutor import PROBLEM, STEPS, guided_turn, new_session
 
 def main():
     client = make_client()
-    retriever = Retriever(client, load_chunks())
+    retriever = Retriever(load_chunks())
     session = new_session()
     print(PROBLEM)
     print(STEPS[0].instruction)

@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import patch
 import streamlit as st
 from streamlit.testing.v1 import AppTest
-from test_core import FakeClient, verdict
+from test_core import FakeClient, FakeEncoder, verdict
 from nikali.config import ROOT
 
 
@@ -13,6 +13,10 @@ class AppTests(unittest.TestCase):
         self.client = FakeClient()
         self.patcher = patch('nikali.config.make_client', return_value=self.client)
         self.patcher.start()
+        self.encoder = FakeEncoder()
+        self.embed_patcher = patch("nikali.rag.make_embedder", return_value=self.encoder)
+        self.embed_patcher.start()
+        self.addCleanup(self.embed_patcher.stop)
         self.addCleanup(self.patcher.stop)
         self.addCleanup(st.cache_resource.clear)
         self.app = AppTest.from_file(str(ROOT / 'app.py'), default_timeout=15)
@@ -61,11 +65,11 @@ class AppTests(unittest.TestCase):
         self.assertFalse(app.exception)
 
     def test_resource_failure_has_actionable_message(self):
-        with patch.object(self.client, 'embed', side_effect=ConnectionError('offline')):
+        with patch.object(self.encoder, 'encode', side_effect=ConnectionError('offline')):
             app = self.app.run()
         self.assertFalse(app.exception)
         self.assertTrue(app.error)
-        self.assertIn('Ollama', app.error[0].value)
+        self.assertIn('BGE-M3', app.error[0].value)
 
 
 if __name__ == '__main__':

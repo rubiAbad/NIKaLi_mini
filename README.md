@@ -12,7 +12,6 @@ Necesitas Python 3.10 o posterior y [Ollama](https://ollama.com/) instalado. Des
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
-ollama pull nomic-embed-text
 ollama pull qwen2.5:3b
 python -m streamlit run app.py
 ```
@@ -21,7 +20,9 @@ En Windows, activa el entorno con `.venv\Scripts\activate` en lugar de `source`.
 
 Mantén Ollama abierto. Si no está ejecutándose, inicia `ollama serve` en otra terminal. Abre la dirección local que imprime Streamlit, normalmente http://localhost:8501. La primera carga genera los embeddings y puede tardar más.
 
-No hacen falta claves de OpenAI, Qdrant ni BGE-M3 para esta versión. Se conservó la tecnología de la web existente: Ollama, `nomic-embed-text`, similitud coseno y `qwen2.5:3b`. Los scripts anteriores con BGE-M3 + Qdrant quedan en el historial Git; sus métricas no son comparables directamente con esta versión.
+Se conserva la configuración de los scripts originales: **`BAAI/bge-m3` mediante Sentence Transformers + Qdrant local en memoria** para recuperación; **`qwen2.5:3b` mediante Ollama** para evaluar y responder. La web usa exactamente el mismo retrieval. No necesitas descargar un modelo de embeddings en Ollama ni iniciar un servidor Qdrant.
+
+BGE-M3 reutiliza la caché local de Hugging Face si ya lo descargaste con tus scripts. Si no está en caché, Sentence Transformers lo descarga durante la primera carga; necesita conexión y puede tardar. Qdrant reconstruye el índice en memoria al iniciar. Las métricas anteriores deben repetirse porque el corpus y las preguntas cambiaron, aunque se conserve el modelo.
 
 ## Qué cambió
 
@@ -53,7 +54,7 @@ Las sesiones viven en memoria de Streamlit; no hay cuentas ni almacenamiento per
 python -m unittest discover -s tests -v
 ```
 
-Utilizan respuestas y vectores simulados. Comprueban flujo, formato, métricas y recuperación ante errores; **no miden calidad de los modelos**.
+Utilizan respuestas y vectores simulados, con Qdrant local real. Comprueban flujo, formato, métricas y recuperación ante errores; **no miden calidad de los modelos**.
 
 ### 2. Ver exactamente qué se indexa
 
@@ -63,7 +64,7 @@ python probar_chunking.py
 
 Revisa los IDs, las fuentes y el marcador de fragmento parcial. Los IDs cambian si renombramos el encabezado o la fuente; en ese caso hay que actualizar las etiquetas de `golden_dataset.py`. El informe incluye un hash del corpus para identificar la versión evaluada.
 
-### 3. Retrieval real, con Ollama iniciado
+### 3. Retrieval real con BGE-M3 (no necesita Ollama)
 
 ```bash
 python probar_rag.py "¿Cómo derivo (3x+1)^4?"
@@ -105,12 +106,12 @@ Incluye 15 casos: respuestas correctas e incorrectas, respuesta parcial, duda y 
 | `evaluar_tutor.py` | Casos de aceptación del evaluador real |
 | `tutor_final_local.py` | Tutor en consola con el mismo núcleo |
 | `scaffold_mac.py` | Entrada anterior redirigida al tutor compartido |
-| `tests/` | Pruebas deterministas con dobles de Ollama |
+| `tests/` | Pruebas con dobles de Qwen y BGE-M3, y Qdrant real |
 
 Variables opcionales: `NIKALI_CHAT_MODEL`, `NIKALI_EMBED_MODEL` y `OLLAMA_HOST`. Cambiar el modelo requiere volver a ejecutar las evaluaciones; reinicia Streamlit después de cambiar variables de entorno.
 
 ## Verificación de esta corrección
 
-Se ejecutaron 17 pruebas automatizadas, todas satisfactorias, con Python 3.12, Streamlit 1.66.0 y cliente Ollama 0.6.3. Las pruebas de interfaz usan `AppTest`, no inspección visual de navegador. No se ejecutaron los modelos reales ni se generaron métricas de calidad en el entorno de corrección; los comandos anteriores quedan preparados para tu máquina.
+Se ejecutaron 18 pruebas automatizadas, todas satisfactorias, con Python 3.12, Streamlit 1.66.0 y Qdrant Client 1.19.1. Los vectores y las respuestas de Qwen se simulan; Qdrant ejecuta las consultas realmente. Las pruebas de interfaz usan `AppTest`, no inspección visual de navegador. No se ejecutaron los modelos reales ni se generaron métricas de calidad en el entorno de corrección; los comandos anteriores quedan preparados para tu máquina.
 
-Referencias de las APIs empleadas: [embeddings de Ollama](https://docs.ollama.com/api/embed), [chat y salida estructurada](https://docs.ollama.com/api/chat) y [pruebas de Streamlit](https://docs.streamlit.io/develop/api-reference/app-testing/st.testing.v1.apptest).
+Referencias de las APIs empleadas: [BGE-M3 con Sentence Transformers](https://huggingface.co/BAAI/bge-m3), [cliente Qdrant](https://github.com/qdrant/qdrant-client), [chat y salida estructurada](https://docs.ollama.com/api/chat) y [pruebas de Streamlit](https://docs.streamlit.io/develop/api-reference/app-testing/st.testing.v1.apptest).
